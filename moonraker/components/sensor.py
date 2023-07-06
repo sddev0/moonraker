@@ -31,6 +31,8 @@ if TYPE_CHECKING:
     from ..confighelper import ConfigHelper
     from ..common import WebRequest
     from .mqtt import MQTTClient
+    from .http_client import HttpClient
+    from ..eventloop import FlexTimer
 
 SENSOR_UPDATE_TIME = 1.0
 SENSOR_EVENT_NAME = "sensors:sensor_update"
@@ -45,12 +47,27 @@ class SensorConfiguration:
 
 
 def _set_result(
-    name: str, value: Union[int, float], store: Dict[str, Union[int, float]]
+    name: str, value: Union[int, float],
+    store: Dict[str, Union[int, float]]
 ) -> None:
     if not isinstance(value, (int, float)):
         store[name] = float(value)
     else:
         store[name] = value
+
+def _set_result_zero(
+    name: str, value: Union[int, float],
+    store: Dict[str, Union[int, float]],
+    initial_value: Union[int, float]
+) -> None:
+    if not isinstance(value, (int, float)):
+        if name not in initial_value:
+            initial_value[name] = float(value)
+        store[name] = float(value) - initial_value[name]
+    else:
+        if name not in initial_value:
+            initial_value[name] = value
+        store[name] = value - initial_value[name]
 
 
 @dataclass(frozen=True)
@@ -70,10 +87,36 @@ class BaseSensor:
             name=cfg.get("name", name),
         )
         self.last_measurements: Dict[str, Union[int, float]] = {}
+        self.first_value: Dict[str, Union[int, float]] = {}
         self.last_value: Dict[str, Union[int, float]] = {}
         self.values: DefaultDict[str, Deque[Union[int, float]]] = defaultdict(
             lambda: deque(maxlen=store_size)
         )
+
+    def _process_payload(self, payload: bytes) -> None:
+        measurements: Dict[str, Union[int, float]] = {}
+        context = {
+            "payload": payload.decode(),
+            "set_result": partial(_set_result,
+                                  store=measurements),
+            "set_result_zero": partial(_set_result_zero,
+                                       store=measurements,
+                                       initial_value=self.first_value)
+        }
+
+        try:
+            self.state_response.render(context)
+        except Exception as e:
+            logging.error("Error updating sensor results: %s", e)
+            self.error_state = str(e)
+        else:
+            self.error_state = None
+            self.last_measurements = measurements
+            logging.debug(
+                "Received updated sensor value for %s: %s",
+                self.config.name,
+                self.last_measurements,
+            )
 
     def _update_sensor_value(self, eventtime: float) -> None:
         """
@@ -125,25 +168,7 @@ class MQTTSensor(BaseSensor):
         )
 
     def _on_state_update(self, payload: bytes) -> None:
-        measurements: Dict[str, Union[int, float]] = {}
-        context = {
-            "payload": payload.decode(),
-            "set_result": partial(_set_result, store=measurements),
-        }
-
-        try:
-            self.state_response.render(context)
-        except Exception as e:
-            logging.error("Error updating sensor results: %s", e)
-            self.error_state = str(e)
-        else:
-            self.error_state = None
-            self.last_measurements = measurements
-            logging.debug(
-                "Received updated sensor value for %s: %s",
-                self.config.name,
-                self.last_measurements,
-            )
+        self._process_payload(payload)
 
     async def _on_mqtt_disconnected(self):
         self.error_state = "MQTT Disconnected"
@@ -163,9 +188,32 @@ class MQTTSensor(BaseSensor):
             self.error_state = str(e)
             return False
 
+class HttpSensor(BaseSensor):
+    def __init__(self, name: str, cfg: ConfigHelper, store_size: int = 1200):
+        super().__init__(name=name, cfg=cfg)
+        self.refresh_timer: Optional[FlexTimer] = None
+        self.http_client: HttpClient = self.server.lookup_component("http_client")
+        self.interval = cfg.get('interval', 1.0)
+        self.url = cfg.get('url')
+        self.state_response = cfg.load_template("state_response_template", "{payload}")
+        self.config = replace(self.config, source=self.url)
+
+    async def _handle_refresh(self, eventtime: float) -> float:
+        response = await self.http_client.get(self.url)
+        self._process_payload(response.content)
+
+        return eventtime + self.interval        
+    
+    async def initialize(self) -> bool:
+        await super().initialize()
+        self.refresh_timer = self.server.event_loop.register_timer(
+            self._handle_refresh)
+        self.refresh_timer.start()
+        return True
+
 
 class Sensors:
-    __sensor_types: Dict[str, Type[BaseSensor]] = {"MQTT": MQTTSensor}
+    __sensor_types: Dict[str, Type[BaseSensor]] = {"MQTT": MQTTSensor, "HTTP": HttpSensor}
 
     def __init__(self, config: ConfigHelper) -> None:
         self.server = config.get_server()

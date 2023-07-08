@@ -77,6 +77,11 @@ class KlippyConnection:
         self._state: str = "disconnected"
         self._state_message: str = "Klippy Disconnected"
         self.subscriptions: Dict[Subscribable, Dict[str, Any]] = {}
+        self._interceptors: List[Interceptor] = []
+        self._interceptors.append(Interceptor(
+            obj_name = "print_stats",
+            value_callback = self.energy_callback
+        ))
         # Setup remote methods accessable to Klippy.  Note that all
         # registered remote methods should be of the notification type,
         # they do not return a response to Klippy after execution
@@ -90,6 +95,9 @@ class KlippyConnection:
             'process_status_update', self._process_status_update,
             need_klippy_reg=False)
         self.server.register_component("klippy_connection", self)
+
+    def energy_callback(self):
+        return {"test": "test"}
 
     def configure(self, config: ConfigHelper):
         self.uds_address = config.getpath(
@@ -496,6 +504,7 @@ class KlippyConnection:
                     logging.info("Klippy has shutdown")
                     self.server.send_event("server:klippy_shutdown")
                 self._state = state
+        status = self.intercept(status)
         for conn, sub in self.subscriptions.items():
             conn_status: Dict[str, Any] = {}
             for name, fields in sub.items():
@@ -519,7 +528,18 @@ class KlippyConnection:
                 if script:
                     self.server.send_event(
                         "klippy_connection:gcode_received", script)
-            return await self._request_standard(web_request)
+            response = await self._request_standard(web_request)
+            if "status" in response:
+                response["status"] = self.intercept(response["status"])
+            return response
+        
+    def intercept(self, status: Dict[str, Any]) -> None:
+        for interceptor in self._interceptors:
+            if interceptor.obj_name in status:
+                status[interceptor.obj_name].update({k: v for k, v
+                                                     in interceptor.value_callback().items()
+                                                     if k not in status[interceptor.obj_name]})
+        return status
 
     async def _request_subscripton(self,
                                    web_request: WebRequest
@@ -701,3 +721,13 @@ class KlippyRequest:
     def to_dict(self) -> Dict[str, Any]:
         return {'id': self.id, 'method': self.rpc_method,
                 'params': self.params}
+
+class Interceptor:
+    obj_name: str
+    value_callback: Callable[[], Dict[str, Any]]
+
+    def __init__(self,
+                 obj_name: str,
+                 value_callback: Callable[[], Dict[str, Any]]) -> None:
+        self.obj_name = obj_name
+        self.value_callback = value_callback

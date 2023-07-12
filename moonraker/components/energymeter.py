@@ -12,7 +12,7 @@ import logging
 from collections import defaultdict, deque
 from dataclasses import dataclass, replace
 from functools import partial
-from .sensor import Sensor, Sensors
+from .history import History
 
 # Annotation imports
 from typing import (
@@ -37,6 +37,8 @@ class EnergyManager:
         self.server = config.get_server()
         self.meters: Dict[str, EnergyMeter] = {}
         self.job_state: str = None
+        self.history: History = self.server.load_component(config, "history")
+        self.history.register_energy_meter("EnergyManager", self.get_total_consumption_current_job)
 
         for section in config.get_prefix_sections("energymeter"):
             cfg = config[section]

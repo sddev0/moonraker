@@ -12,6 +12,7 @@ from ..common import JobEvent, RequestType
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
     Union,
     Optional,
     Dict,
@@ -20,6 +21,7 @@ from typing import (
 if TYPE_CHECKING:
     from ..confighelper import ConfigHelper
     from ..common import WebRequest
+    from ..utils import ServerError
     from .database import MoonrakerDatabase as DBComp
     from .job_state import JobState
     from .file_manager.file_manager import FileManager
@@ -34,6 +36,7 @@ class History:
         self.file_manager: FileManager = self.server.lookup_component(
             'file_manager')
         self.request_lock = Lock()
+        self.energy_meter_callbacks: Dict[str, Callable[[], float]] = {}
         database: DBComp = self.server.lookup_component("database")
         self.job_totals: Dict[str, float] = database.get_item(
             "moonraker", "history.job_totals",
@@ -42,6 +45,7 @@ class History:
                 'total_time': 0.,
                 'total_print_time': 0.,
                 'total_filament_used': 0.,
+                'total_energy_used': 0.,
                 'longest_job': 0.,
                 'longest_print': 0.
             }).result()
@@ -206,6 +210,7 @@ class History:
             'total_time': 0.,
             'total_print_time': 0.,
             'total_filament_used': 0.,
+            'total_energy_used': 0.,
             'longest_job': 0.,
             'longest_print': 0.
         }
@@ -281,6 +286,7 @@ class History:
         self.current_job.finish(status, pstats)
         # Regrab metadata incase metadata wasn't parsed yet due to file upload
         self.grab_job_metadata()
+        self.get_energy_consumption()
         self.save_current_job()
         self._update_job_totals()
         logging.debug(
@@ -323,6 +329,23 @@ class History:
                 thumb.pop('data', None)
         self.current_job.set("metadata", metadata)
 
+    def register_energy_meter(self, name: str, callback: Callable[[], float]) -> None:
+        if name in self.energy_meter_callbacks:
+            raise self.server.error(f"Energy meter '{name}' was already registered")
+        self.energy_meter_callbacks[name] = callback
+
+    def get_energy_consumption(self) -> None:
+        if self.current_job is None:
+            return
+        consumption: float = 0.
+        for name, energy_callback in self.energy_meter_callbacks.items():
+            try:
+                consumption += energy_callback()
+            except:
+                logging.exception(f"Energy callback '{name}' could not be executed")
+        
+        self.current_job.set("energy_used", consumption)
+
     def save_current_job(self) -> None:
         if self.current_job is None or self.current_job_id is None:
             return
@@ -336,6 +359,7 @@ class History:
         self.job_totals['total_time'] += job.get('total_duration')
         self.job_totals['total_print_time'] += job.get('print_duration')
         self.job_totals['total_filament_used'] += job.get('filament_used')
+        self.job_totals['total_energy_used'] += job.get('energy_used')
         self.job_totals['longest_job'] = max(
             self.job_totals['longest_job'], job.get('total_duration'))
         self.job_totals['longest_print'] = max(
@@ -371,7 +395,8 @@ class History:
 class PrinterJob:
     def __init__(self, data: Dict[str, Any] = {}) -> None:
         self.end_time: Optional[float] = None
-        self.filament_used: float = 0
+        self.filament_used: float = 0.
+        self.energy_used: float = 0.
         self.filename: Optional[str] = None
         self.metadata: Optional[Dict[str, Any]] = None
         self.print_duration: float = 0.

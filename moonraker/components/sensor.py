@@ -55,20 +55,6 @@ def _set_result(
     else:
         store[name] = value
 
-def _set_result_zero(
-    name: str, value: Union[int, float],
-    store: Dict[str, Union[int, float]],
-    initial_value: Union[int, float]
-) -> None:
-    if not isinstance(value, (int, float)):
-        if name not in initial_value:
-            initial_value[name] = float(value)
-        store[name] = float(value) - initial_value[name]
-    else:
-        if name not in initial_value:
-            initial_value[name] = value
-        store[name] = value - initial_value[name]
-
 
 @dataclass(frozen=True)
 class Sensor:
@@ -87,7 +73,6 @@ class BaseSensor:
             name=cfg.get("name", name),
         )
         self.last_measurements: Dict[str, Union[int, float]] = {}
-        self.first_value: Dict[str, Union[int, float]] = {}
         self.last_value: Dict[str, Union[int, float]] = {}
         self.values: DefaultDict[str, Deque[Union[int, float]]] = defaultdict(
             lambda: deque(maxlen=store_size)
@@ -98,10 +83,7 @@ class BaseSensor:
         context = {
             "payload": payload.decode(),
             "set_result": partial(_set_result,
-                                  store=measurements),
-            "set_result_zero": partial(_set_result_zero,
-                                       store=measurements,
-                                       initial_value=self.first_value)
+                                  store=measurements)
         }
 
         try:
@@ -338,6 +320,9 @@ class Sensors:
                 key: sensor.get_sensor_measurements()
                 for key, sensor in self.sensors.items()
             }
+
+    def get_valid_sensor_ids(self) -> List[str]:
+        return self.sensors.keys()
 
     def close(self) -> None:
         self.sensors_update_timer.stop()

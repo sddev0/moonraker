@@ -321,9 +321,6 @@ class Sensors:
                 for key, sensor in self.sensors.items()
             }
 
-    def get_valid_sensor_ids(self) -> List[str]:
-        return self.sensors.keys()
-
     def close(self) -> None:
         self.sensors_update_timer.stop()
         for sensor in self.sensors.values():

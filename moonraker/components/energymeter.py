@@ -51,7 +51,7 @@ class EnergyManager:
             self.meters[meter.get_name()] = meter
 
         self.server.register_endpoint(
-            "/server/energy", ['GET'], self._handle_energy_request)
+            "/machine/energy", ['GET'], self._handle_energy_request)
         logging.info("EnergyManager initialized")
 
         self.server.register_event_handler(
@@ -79,18 +79,20 @@ class EnergyManager:
         if self.job_state is not None and self.job_state != "idle":
             total["consumption"]["current_job"] = round(self.get_total_consumption_current_job(), 2)
         result["total"] = total
+        result["devices"]: List[Dict[str, Any]] = []
         
         for meter in self.meters.values():
-            output: Dict [str, any] = {
+            device: Dict [str, any] = {
+                "name": meter.get_name(),
                 "power": round(meter.get_power(), 2),
                     "consumption": {
                         "total": round(meter.get_consumption(), 2)
                 }
             }
             if self.job_state is not None and self.job_state != "idle":
-                output["consumption"]["current_job"] = round(meter.get_consumption_current_job(), 2)
+                device["consumption"]["current_job"] = round(meter.get_consumption_current_job(), 2)
             
-            result[meter.get_name()] = output
+            result["devices"].append(device)
 
         return result
     

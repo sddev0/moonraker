@@ -38,7 +38,7 @@ class EnergyManager:
         self.meters: Dict[str, EnergyMeter] = {}
         self.job_state: str = None
         self.history: History = self.server.load_component(config, "history")
-        self.history.register_energy_meter("EnergyManager", self.get_total_consumption_current_job)
+        self.history.register_energy_meter("EnergyManager", self._on_request_job_consumption)
 
         for section in config.get_prefix_sections("energymeter"):
             cfg = config[section]
@@ -104,7 +104,7 @@ class EnergyManager:
         return sum(meter.get_consumption_current_job() for meter in self.meters.values() if meter.get_consumption_current_job() is not None)
     
     def _on_request_job_consumption(self) -> float:
-        return 0.
+        return self.get_total_consumption_current_job()
     
     def _on_job_started(self,
                         prev_stats: Dict[str, Any],

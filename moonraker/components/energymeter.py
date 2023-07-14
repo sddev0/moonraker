@@ -36,7 +36,7 @@ class EnergyManager:
     def __init__(self, config: ConfigHelper):
         self.server = config.get_server()
         self.meters: Dict[str, EnergyMeter] = {}
-        self.job_state: str = None
+        self.job_state: str = "idle"
         self.history: History = self.server.load_component(config, "history")
         self.history.register_energy_meter("EnergyManager", self._on_request_job_consumption)
 
@@ -54,6 +54,9 @@ class EnergyManager:
             "/machine/energy", ['GET'], self._handle_energy_request)
         logging.info("EnergyManager initialized")
 
+        config.server.register_event_handler(
+            "sensors:sensor_update", self._update_meters)
+
         self.server.register_event_handler(
             "job_state:started", self._on_job_started)
         self.server.register_event_handler(
@@ -64,37 +67,22 @@ class EnergyManager:
             "job_state:standby", self._on_job_standby)
         self.server.register_event_handler(
             "job_state:error", self._on_job_error)
+        
+        self.server.register_notification('energymeter:energy_changed')
+
+    def _update_meters(self, sensor_data: Dict[str, Dict[str, Union[int, float]]]) -> None:
+        for meter in self.meters.values():
+            last_info = meter.get_meter_info()
+            meter.update(sensor_data)
+            current_info = meter.get_meter_info()
+            if current_info != last_info:
+                self.server.send_event("energymeter:energy_changed", current_info)
+                
 
     async def _handle_energy_request(
             self, web_request: WebRequest
             )-> Dict[str, Any]:
-        result: Dict[str, Any] = {}
-
-        total: Dict[str, Any] = {
-            "power": round(self.get_total_power(), 2),
-            "consumption": {
-                "total": round(self.get_total_consumption(), 2)
-            }
-        }
-        if self.job_state is not None and self.job_state != "idle":
-            total["consumption"]["current_job"] = round(self.get_total_consumption_current_job(), 2)
-        result["total"] = total
-        result["devices"]: List[Dict[str, Any]] = []
-        
-        for meter in self.meters.values():
-            device: Dict [str, any] = {
-                "name": meter.get_name(),
-                "power": round(meter.get_power(), 2),
-                    "consumption": {
-                        "total": round(meter.get_consumption(), 2)
-                }
-            }
-            if self.job_state is not None and self.job_state != "idle":
-                device["consumption"]["current_job"] = round(meter.get_consumption_current_job(), 2)
-            
-            result["devices"].append(device)
-
-        return result
+        return {'meters': [meter.get_meter_info() for meter in self.meters.values()]}
     
     def get_total_power(self) -> float:
         return sum(meter.get_power() for meter in self.meters.values() if meter.get_power() is not None)
@@ -108,36 +96,24 @@ class EnergyManager:
     def _on_request_job_consumption(self) -> float:
         return self.get_total_consumption_current_job()
     
-    def _on_job_started(self,
-                        prev_stats: Dict[str, Any],
-                        new_stats: Dict[str, Any]
-                        ) -> None:
+    def _on_job_started(self, *_) -> None:
         self.job_state = "printing"
+        for meter in self.meters.values():
+            meter.reset_consumption_current_job()
 
-
-    def _on_job_complete(self,
-                         prev_stats: Dict[str, Any],
-                         new_stats: Dict[str, Any]
-                         ) -> None:
+    def _on_job_complete(self, *_) -> None:
         self.job_state = "complete"
 
-    def _on_job_cancelled(self,
-                          prev_stats: Dict[str, Any],
-                          new_stats: Dict[str, Any]
-                          ) -> None:
+    def _on_job_cancelled(self, *_) -> None:
         self.job_state = "complete"
 
-    def _on_job_error(self,
-                      prev_stats: Dict[str, Any],
-                      new_stats: Dict[str, Any]
-                      ) -> None:
+    def _on_job_error(self, *_) -> None:
         self.job_state = "complete"
 
-    def _on_job_standby(self,
-                        prev_stats: Dict[str, Any],
-                        new_stats: Dict[str, Any]
-                        ) -> None:
+    def _on_job_standby(self, *_) -> None:
         self.job_state = "idle"
+        for meter in self.meters.values():
+            meter.reset_consumption_current_job()
 
 class EnergyMeter:
     def __init__(self, config: ConfigHelper, manager: EnergyManager):
@@ -150,12 +126,9 @@ class EnergyMeter:
 
         self.consumption: float = 0.
         self.consumption_last: float = None
-        self.consumption_current_job: float = 0.
+        self.consumption_current_job: float = None
 
-        config.server.register_event_handler(
-            "sensors:sensor_update", self._handle_sensor_update)
-
-    def _handle_sensor_update(self, sensor_data: Dict[str, Dict[str, Union[int, float]]]) -> None:
+    def update(self, sensor_data: Dict[str, Dict[str, Union[int, float]]]) -> None:
         if self.power_sensor.sensor in sensor_data:
             self._update_power(sensor_data[self.power_sensor.sensor])
         if self.consumption_sensor.sensor in sensor_data:
@@ -201,6 +174,21 @@ class EnergyMeter:
 
     def get_name(self) -> str:
         return self.name
+    
+    def reset_consumption_current_job(self) -> None:
+        self.consumption_current_job = None
+
+    def get_meter_info(self) -> Dict[str, Any]:
+        info: Dict[str, Any] = {
+            'meter': self.name,
+            'power': round(self.power, 2),
+            'consumption': {
+                'total': round(self.consumption, 2)
+            }
+        }
+        if self.manager.job_state != "idle":
+            info['consumption']['current_job'] = round(self.consumption_current_job, 2)
+        return info
     
 class SensorLink:
     sensor: str

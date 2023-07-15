@@ -355,6 +355,8 @@ class History:
         if self.current_job is None:
             return
         job = self.current_job
+        if 'total_energy_used' not in self.job_totals:
+            self.job_totals['total_energy_used'] = 0.
         self.job_totals['total_jobs'] += 1
         self.job_totals['total_time'] += job.get('total_duration')
         self.job_totals['total_print_time'] += job.get('print_duration')

@@ -82,7 +82,8 @@ class EnergyManager:
     async def _handle_energy_request(
             self, web_request: WebRequest
             )-> Dict[str, Any]:
-        return {'meters': [meter.get_meter_info() for meter in self.meters.values()]}
+        return {meter.get_name(): meter.get_meter_info()
+                for meter in self.meters.values()}
     
     def get_total_power(self) -> float:
         return sum(meter.get_power() for meter in self.meters.values() if meter.get_power() is not None)

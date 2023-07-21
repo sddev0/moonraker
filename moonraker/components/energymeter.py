@@ -100,7 +100,7 @@ class EnergyManager:
     def _on_job_started(self, *_) -> None:
         self.job_state = "printing"
         for meter in self.meters.values():
-            meter.reset_consumption_current_job()
+            meter.consumption_current_job = 0.
 
     def _on_job_complete(self, *_) -> None:
         self.job_state = "complete"
@@ -114,7 +114,7 @@ class EnergyManager:
     def _on_job_standby(self, *_) -> None:
         self.job_state = "idle"
         for meter in self.meters.values():
-            meter.reset_consumption_current_job()
+            meter.consumption_current_job = None
 
 class EnergyMeter:
     def __init__(self, config: ConfigHelper, manager: EnergyManager):
@@ -175,9 +175,6 @@ class EnergyMeter:
 
     def get_name(self) -> str:
         return self.name
-    
-    def reset_consumption_current_job(self) -> None:
-        self.consumption_current_job = None
 
     def get_meter_info(self) -> Dict[str, Any]:
         info: Dict[str, Any] = {
@@ -187,7 +184,7 @@ class EnergyMeter:
                 'total': round(self.consumption, 2)
             }
         }
-        if self.manager.job_state != "idle":
+        if self.consumption_current_job is not None:
             info['consumption']['current_job'] = round(self.consumption_current_job, 2)
         return info
     

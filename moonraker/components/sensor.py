@@ -137,7 +137,7 @@ class BaseSensor:
 
 class MQTTSensor(BaseSensor):
     def __init__(self, name: str, cfg: ConfigHelper, store_size: int = 1200):
-        super().__init__(name=name, cfg=cfg)
+        super().__init__(name=name, cfg=cfg, store_size=store_size)
         self.mqtt: MQTTClient = self.server.load_component(cfg, "mqtt")
 
         self.state_topic: str = cfg.get("state_topic")
@@ -171,20 +171,43 @@ class MQTTSensor(BaseSensor):
             return False
 
 class HttpSensor(BaseSensor):
+    FREE_ERRORS: int = 3
+    __methods: Dict[str, str] = {"get": "GET", "post": "POST"}
     def __init__(self, name: str, cfg: ConfigHelper, store_size: int = 1200):
-        super().__init__(name=name, cfg=cfg)
+        super().__init__(name=name, cfg=cfg, store_size=store_size)
         self.refresh_timer: Optional[FlexTimer] = None
         self.http_client: HttpClient = self.server.lookup_component("http_client")
-        self.interval = cfg.get('interval', 1.0)
-        self.url = cfg.get('url')
+        self.interval = cfg.getfloat("interval", 1.0)
+        self.url = cfg.get("url")
         self.state_response = cfg.load_template("state_response_template", "{payload}")
+        method_name = cfg.get("method", "get").lower()
+        if method_name not in self.__methods:
+            raise self.server.error(f"HttpSensor '{name}' method '{method_name}' is unsupported.")
+        self.method = self.__methods[method_name]
         self.config = replace(self.config, source=self.url)
+        self.error_count: int = 0
 
     async def _handle_refresh(self, eventtime: float) -> float:
-        response = await self.http_client.get(self.url)
-        self._process_payload(response.content)
+        response = await self.http_client.request(
+            method=self.method,
+            url=self.url
+        )
+        if response.has_error():
+            logging.error(f"HttpSensor '{self.get_name()}' could not be fetched: {response.error}")
+            self.error_count += 1
+        else:
+            self._process_payload(response.content)
+            self.error_count = 0
 
-        return eventtime + self.interval        
+        next_interval = self.interval
+        if self.error_count > self.FREE_ERRORS:
+            next_interval = min(
+                2. * pow(2, self.error_count - self.FREE_ERRORS - 1),
+                300.)
+            logging.info(
+                f"Throttling HttpSensor '{self.get_name()}' to {next_interval}s")
+
+        return eventtime + next_interval
     
     async def initialize(self) -> bool:
         await super().initialize()

@@ -92,7 +92,9 @@ class EnergyManager:
         return sum(meter.get_consumption() for meter in self.meters.values() if meter.get_consumption() is not None)
 
     def get_total_consumption_current_job(self) -> float:
-        return sum(meter.get_consumption_current_job() for meter in self.meters.values() if meter.get_consumption_current_job() is not None)
+        return sum(meter.get_consumption_current_job()
+                   for meter in self.meters.values()
+                   if meter.get_consumption_current_job() is not None)
     
     def _on_request_job_consumption(self) -> float:
         return self.get_total_consumption_current_job()
@@ -100,7 +102,8 @@ class EnergyManager:
     def _on_job_started(self, *_) -> None:
         self.job_state = "printing"
         for meter in self.meters.values():
-            meter.consumption_current_job = 0.
+            if meter.is_job_related:
+                meter.consumption_current_job = 0.
 
     def _on_job_complete(self, *_) -> None:
         self.job_state = "complete"
@@ -121,10 +124,9 @@ class EnergyMeter:
         self.name = config.get_name().split(" ", maxsplit=1)[1]
         self.power_sensor = SensorLink(config.get("power_sensor"))
         self.consumption_sensor = SensorLink(config.get("consumption_sensor"))
+        self.is_job_related: bool = config.getboolean("is_job_related", True)
         self.manager = manager
-
         self.power: float = 0.
-
         self.consumption: float = 0.
         self.consumption_last: float = None
         self.consumption_current_job: float = None
@@ -159,7 +161,8 @@ class EnergyMeter:
         
         self.consumption += increase
 
-        if self.manager.job_state == "printing":
+        if (self.manager.job_state == "printing" 
+                and self.is_job_related):
             self.consumption_current_job += increase
 
         self.consumption_last = current_consumption
@@ -179,12 +182,14 @@ class EnergyMeter:
     def get_meter_info(self) -> Dict[str, Any]:
         info: Dict[str, Any] = {
             'meter': self.name,
+            'is_job_related': self.is_job_related,
             'power': round(self.power, 2),
             'consumption': {
                 'total': round(self.consumption, 2)
             }
         }
-        if self.consumption_current_job is not None:
+        if (self.is_job_related
+                and self.consumption_current_job is not None):
             info['consumption']['current_job'] = round(self.consumption_current_job, 2)
         return info
     

@@ -208,7 +208,7 @@ class HttpSensor(BaseSensor):
                 f"Throttling HttpSensor '{self.get_name()}' to {next_interval}s")
 
         return eventtime + next_interval
-    
+
     async def initialize(self) -> bool:
         await super().initialize()
         self.refresh_timer = self.server.event_loop.register_timer(

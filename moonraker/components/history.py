@@ -343,7 +343,7 @@ class History:
                 consumption += energy_callback()
             except:
                 logging.exception(f"Energy callback '{name}' could not be executed")
-        
+
         self.current_job.set("energy_used", consumption)
 
     def save_current_job(self) -> None:
